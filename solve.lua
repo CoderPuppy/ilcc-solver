@@ -1,4 +1,5 @@
 local do_ui = true
+local single_step = false
 local debug
 do
 	if false then
@@ -251,6 +252,7 @@ local data = setmetatable({}, {
 local to_check = {}
 local really_done = {}
 
+local dirty_render = {}
 local dirty = {}
 local function mark_dirty(x, y)
 	if x <= 0 or x > grid.w or y <= 0 or y > grid.h then
@@ -258,6 +260,7 @@ local function mark_dirty(x, y)
 	end
 
 	dirty[P(x, y)] = {x, y}
+	dirty_render[P(x, y)] = {x, y}
 end
 
 local function compatible(...)
@@ -388,42 +391,42 @@ if cmd:match '^g' then
 		end
 	end
 
-	local co = coroutine.create(function()
-		function mark_check(x, y)
-			if x <= 0 or x > grid.w or y <= 0 or y > grid.h then
-				return
-			end
-
-			local k = P(x, y)
-			if not really_done[k] and not to_check[k] then
-				to_check[k] = {x, y}
-
-				-- debug('dirt (%d %d): mark check', x, y)
-				mark_dirty(x, y)
-			end
+	function mark_check(x, y)
+		if x <= 0 or x > grid.w or y <= 0 or y > grid.h then
+			return
 		end
 
-		local function find_possible(x, y)
-			local d = data[P(x, y)]
+		local k = P(x, y)
+		if not really_done[k] and not to_check[k] then
+			to_check[k] = {x, y}
 
-			local possible = {}
+			-- debug('dirt (%d %d): mark check', x, y)
+			mark_dirty(x, y)
+		end
+	end
 
-			for _, typ in ipairs(types) do
-				for _, var in ipairs(typ.variants) do
-					if
-						compatible(d.up,    var.connections.up    and 'T' or 'F') and
-						compatible(d.right, var.connections.right and 'T' or 'F') and
-						compatible(d.down,  var.connections.down  and 'T' or 'F') and
-						compatible(d.left,  var.connections.left  and 'T' or 'F')
-					then
-						possible[#possible + 1] = var
-					end
+	local function find_possible(x, y)
+		local d = data[P(x, y)]
+
+		local possible = {}
+
+		for _, typ in ipairs(types) do
+			for _, var in ipairs(typ.variants) do
+				if
+					compatible(d.up,    var.connections.up    and 'T' or 'F') and
+					compatible(d.right, var.connections.right and 'T' or 'F') and
+					compatible(d.down,  var.connections.down  and 'T' or 'F') and
+					compatible(d.left,  var.connections.left  and 'T' or 'F')
+				then
+					possible[#possible + 1] = var
 				end
 			end
-
-			return possible
 		end
 
+		return possible
+	end
+
+	local co = coroutine.create(function()
 		for x = 1, grid.w do
 			apply(x, 1, 'up', 'F')
 			apply(x, grid.h, 'down', 'F')
@@ -435,14 +438,12 @@ if cmd:match '^g' then
 		end
 		
 		mark_check(math.ceil(grid.w / 2), math.ceil(grid.h / 2))
+		-- mark_check(math.ceil(grid.w / 4), math.ceil(grid.h / 2))
+		-- mark_check(math.ceil(3 * grid.w / 4), math.ceil(grid.h / 2))
+		-- mark_check(math.ceil(grid.w / 2), math.ceil(grid.h / 4))
+		-- mark_check(math.ceil(grid.w / 2), math.ceil(3 * grid.h / 4))
 
 		while true do
-			for pk, p in pairs(dirty) do
-				if do_ui then
-					term.setCursorPos(p[1] * 3 - 2, p[2] * 2 - 1)
-					render_dirs(render_data(p[1], p[2]))
-				end
-			end
 			dirty = {}
 
 			coroutine.yield()
@@ -469,6 +470,10 @@ if cmd:match '^g' then
 				grid[p[1]][p[2]] = var
 
 				apply_var(p[1], p[2], var)
+
+				if single_step then
+					coroutine.yield()
+				end
 			end
 
 			if not any then
@@ -507,6 +512,15 @@ if cmd:match '^g' then
 	while coroutine.status(co) ~= 'dead' do
 		os.pullEvent('mouse_click')
 		local ok, err = coroutine.resume(co)
+
+		if do_ui then
+			for pk, p in pairs(dirty_render) do
+				term.setCursorPos(p[1] * 3 - 2, p[2] * 2 - 1)
+				render_dirs(render_data(p[1], p[2]))
+			end
+		end
+		dirty_render = {}
+
 		if not ok then
 			error(err)
 		end
@@ -577,13 +591,13 @@ elseif cmd:match '^s' then
 
 				-- mm = '7'; -- gray
 				mm =
-					to_check[P(x, y)] and '2' or -- magenta
-					new_check[P(x, y)] and 'a' or -- purple
 					really_done[P(x, y)] and (
 						(d.up == 'T' or d.right == 'T' or d.down == 'T' or d.left == 'T')
 						and 'f'
 						or '0'
 					) or
+					to_check[P(x, y)] and '2' or -- magenta
+					new_check[P(x, y)] and 'a' or -- purple
 					'7'; -- gray
 					-- to_check[P(x, y)] and '2' or -- orange
 					-- really_done[P(x, y)] and 'd' or -- green
@@ -609,6 +623,26 @@ elseif cmd:match '^s' then
 		end
 	end
 
+	local function find_possible(x, y)
+		local typ = grid[x][y].type
+		local d = data[P(x, y)]
+
+		local possible = {}
+
+		for _, var in ipairs(typ.variants) do
+			if
+				compatible(d.up,    var.connections.up    and 'T' or 'F') and
+				compatible(d.right, var.connections.right and 'T' or 'F') and
+				compatible(d.down,  var.connections.down  and 'T' or 'F') and
+				compatible(d.left,  var.connections.left  and 'T' or 'F')
+			then
+				possible[#possible + 1] = var
+			end
+		end
+
+		return possible
+	end
+
 	local function bad(msg)
 		if #path > 0 then
 			error('TODO: rollback')
@@ -617,40 +651,21 @@ elseif cmd:match '^s' then
 		end
 	end
 
+	function mark_check(x, y)
+		if x <= 0 or x > grid.w or y <= 0 or y > grid.h then
+			return
+		end
+
+		local k = P(x, y)
+		if not really_done[k] and not to_check[k] and not new_check[k] then
+			new_check[k] = {x, y}
+
+			-- debug('dirt (%d %d): mark check', x, y)
+			mark_dirty(x, y)
+		end
+	end
+
 	local co = coroutine.create(function()
-		function mark_check(x, y)
-			if x <= 0 or x > grid.w or y <= 0 or y > grid.h then
-				return
-			end
-
-			local k = P(x, y)
-			if not really_done[k] and not to_check[k] and not new_check[k] then
-				new_check[k] = {x, y}
-
-				-- debug('dirt (%d %d): mark check', x, y)
-				mark_dirty(x, y)
-			end
-		end
-		local function find_possible(x, y)
-			local typ = grid[x][y].type
-			local d = data[P(x, y)]
-
-			local possible = {}
-
-			for _, var in ipairs(typ.variants) do
-				if
-					compatible(d.up,    var.connections.up    and 'T' or 'F') and
-					compatible(d.right, var.connections.right and 'T' or 'F') and
-					compatible(d.down,  var.connections.down  and 'T' or 'F') and
-					compatible(d.left,  var.connections.left  and 'T' or 'F')
-				then
-					possible[#possible + 1] = var
-				end
-			end
-
-			return possible
-		end
-
 		for x = 1, grid.w do
 			mark_check(x, 1)
 			apply(x, 1, 'up', 'F')
@@ -668,17 +683,7 @@ elseif cmd:match '^s' then
 		end
 
 		while true do
-			local any = false
-			for pk, p in pairs(dirty) do
-				any = true
-				if do_ui then
-					term.setCursorPos(p[1] * 3 - 2, p[2] * 2 - 1)
-					render_dirs(render_data(p[1], p[2]))
-				end
-			end
-			dirty = {}
-
-			if not any then
+			if not next(dirty) then
 				-- nothing changed but it's not done
 				local all = {}
 				for pk in pairs(to_check) do
@@ -707,9 +712,8 @@ elseif cmd:match '^s' then
 				}
 
 				apply_var(x, y, possible[1])
-
-				-- break
 			end
+			dirty = {}
 
 			coroutine.yield()
 
@@ -722,7 +726,6 @@ elseif cmd:match '^s' then
 				local d = data[pk]
 
 				local possible = find_possible(p[1], p[2])
-
 
 				if #possible == 1 then
 					apply_var(p[1], p[2], possible[1])
@@ -763,6 +766,10 @@ elseif cmd:match '^s' then
 					end
 				else
 					bad(('no possible variants at (%d %d)'):format(p[1], p[2]))
+				end
+
+				if single_step then
+					coroutine.yield()
 				end
 			end
 			for pk, p in pairs(finished) do
@@ -805,8 +812,15 @@ elseif cmd:match '^s' then
 	while coroutine.status(co) ~= 'dead' do
 		os.pullEvent('mouse_click')
 		local ok, err = coroutine.resume(co)
+		if do_ui then
+			for pk, p in pairs(dirty_render) do
+				term.setCursorPos(p[1] * 3 - 2, p[2] * 2 - 1)
+				render_dirs(render_data(p[1], p[2]))
+			end
+		end
+		dirty_render = {}
 		if not ok then
-			bad(err)
+			error(err)
 		end
 	end
 
