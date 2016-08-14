@@ -239,11 +239,86 @@ end
 
 local cmd = ...
 
+local grid
+
+local data = setmetatable({}, {
+	__index = function(t, k)
+		local t_ = {}
+		t[k] = t_
+		return t_
+	end;
+})
+local to_check = {}
+local really_done = {}
+
+local dirty = {}
+local function mark_dirty(x, y)
+	if x <= 0 or x > grid.w or y <= 0 or y > grid.h then
+		return
+	end
+
+	dirty[P(x, y)] = {x, y}
+end
+
+local function compatible(...)
+	local cur = nil
+	for i = 1, select('#', ...) do
+		local v = select(i, ...)
+		if cur ~= nil and v ~= nil and cur ~= v then
+			return false
+		end
+		cur = cur or v
+	end
+	return true
+end
+
+local mark_check
+
+local apply
+do
+	local function do_apply(x, y, dir, v)
+		local d = data[P(x, y)]
+		if not compatible(d[dir], v) then
+			error(('mismatch between fixed links at (%d %d) %s have %s applying %s'):format(x, y, dir, d[dir], v))
+		end
+
+		local prev = d[dir]
+
+		d[dir] = v
+
+		if prev ~= v then
+			-- debug('dirt (%d %d): apply', x, y)
+			mark_dirty(x, y)
+		end
+	end
+
+	function apply(x, y, dir, v)
+		if v == nil then return end
+
+		do_apply(x, y, dir, v)
+
+		local ox, oy = offset(dir)
+		local odir = opposite(dir)
+		local od = data[P(x + ox, y + oy)]
+
+		do_apply(x + ox, y + oy, odir, v)
+		
+		mark_check(x + ox, y + oy)
+	end
+end
+
+local function apply_var(x, y, var)
+	apply(x, y, 'up'   , var.connections.up    and 'T' or 'F')
+	apply(x, y, 'right', var.connections.right and 'T' or 'F')
+	apply(x, y, 'down' , var.connections.down  and 'T' or 'F')
+	apply(x, y, 'left' , var.connections.left  and 'T' or 'F')
+end
+
 if cmd:match '^g' then
 	local _, file, w, h = ...
 	w, h = tonumber(w), tonumber(h)
 
-	local grid = {w = w; h = h;}
+	grid = {w = w; h = h;}
 	for x = 1, w do
 		local col = {}
 		grid[x] = col
@@ -251,16 +326,6 @@ if cmd:match '^g' then
 			col[y] = types[1].variants[1]
 		end
 	end
-
-	local data = setmetatable({}, {
-		__index = function(t, k)
-			local t_ = {}
-			t[k] = t_
-			return t_
-		end;
-	})
-	local to_check = {}
-	local really_done = {}
 
 	local render_data
 	do
@@ -324,16 +389,7 @@ if cmd:match '^g' then
 	end
 
 	local co = coroutine.create(function()
-		local dirty = {}
-		local function mark_dirty(x, y)
-			if x <= 0 or x > grid.w or y <= 0 or y > grid.h then
-				return
-			end
-
-			dirty[P(x, y)] = {x, y}
-		end
-
-		local function mark_check(x, y)
+		function mark_check(x, y)
 			if x <= 0 or x > grid.w or y <= 0 or y > grid.h then
 				return
 			end
@@ -345,58 +401,6 @@ if cmd:match '^g' then
 				-- debug('dirt (%d %d): mark check', x, y)
 				mark_dirty(x, y)
 			end
-		end
-
-		local function compatible(...)
-			local cur = nil
-			for i = 1, select('#', ...) do
-				local v = select(i, ...)
-				if cur ~= nil and v ~= nil and cur ~= v then
-					return false
-				end
-				cur = cur or v
-			end
-			return true
-		end
-
-		local apply
-		do
-			local function do_apply(x, y, dir, v)
-				local d = data[P(x, y)]
-				if not compatible(d[dir], v) then
-					error(('mismatch between fixed links at (%d %d) %s have %s applying %s'):format(x, y, dir, d[dir], v))
-				end
-
-				local prev = d[dir]
-
-				d[dir] = v
-
-				if prev ~= v then
-					-- debug('dirt (%d %d): apply', x, y)
-					mark_dirty(x, y)
-				end
-			end
-
-			function apply(x, y, dir, v)
-				if v == nil then return end
-
-				do_apply(x, y, dir, v)
-
-				local ox, oy = offset(dir)
-				local odir = opposite(dir)
-				local od = data[P(x + ox, y + oy)]
-
-				do_apply(x + ox, y + oy, odir, v)
-				
-				mark_check(x + ox, y + oy)
-			end
-		end
-
-		local function apply_var(x, y, var)
-			apply(x, y, 'up'   , var.connections.up    and 'T' or 'F')
-			apply(x, y, 'right', var.connections.right and 'T' or 'F')
-			apply(x, y, 'down' , var.connections.down  and 'T' or 'F')
-			apply(x, y, 'left' , var.connections.left  and 'T' or 'F')
 		end
 
 		local function find_possible(x, y)
@@ -517,23 +521,13 @@ if cmd:match '^g' then
 	h.write(serialize(grid))
 	h.close()
 elseif cmd:match '^s' then
-	local grid
 	do
 		local h = fs.open(select(2, ...), 'r')
 		grid = parse(h.readAll())
 		h.close()
 	end
 
-	local data = setmetatable({}, {
-		__index = function(t, k)
-			local t_ = {}
-			t[k] = t_
-			return t_
-		end;
-	})
-	local to_check = {}
 	local new_check = {}
-	local really_done = {}
 	local path = {}
 
 	local render_data
@@ -624,16 +618,7 @@ elseif cmd:match '^s' then
 	end
 
 	local co = coroutine.create(function()
-		local dirty = {}
-		local function mark_dirty(x, y)
-			if x <= 0 or x > grid.w or y <= 0 or y > grid.h then
-				return
-			end
-
-			dirty[P(x, y)] = {x, y}
-		end
-
-		local function mark_check(x, y)
+		function mark_check(x, y)
 			if x <= 0 or x > grid.w or y <= 0 or y > grid.h then
 				return
 			end
@@ -646,59 +631,6 @@ elseif cmd:match '^s' then
 				mark_dirty(x, y)
 			end
 		end
-
-		local function compatible(...)
-			local cur = nil
-			for i = 1, select('#', ...) do
-				local v = select(i, ...)
-				if cur ~= nil and v ~= nil and cur ~= v then
-					return false
-				end
-				cur = cur or v
-			end
-			return true
-		end
-
-		local apply
-		do
-			local function do_apply(x, y, dir, v)
-				local d = data[P(x, y)]
-				if not compatible(d[dir], v) then
-					bad(('mismatch between fixed links at (%d %d) %s have %s applying %s'):format(x, y, dir, d[dir], v))
-				end
-
-				local prev = d[dir]
-
-				d[dir] = v
-
-				if prev ~= v then
-					-- debug('dirt (%d %d): apply', x, y)
-					mark_dirty(x, y)
-				end
-			end
-
-			function apply(x, y, dir, v)
-				if v == nil then return end
-
-				do_apply(x, y, dir, v)
-
-				local ox, oy = offset(dir)
-				local odir = opposite(dir)
-				local od = data[P(x + ox, y + oy)]
-
-				do_apply(x + ox, y + oy, odir, v)
-
-				mark_check(x + ox, y + oy)
-			end
-		end
-
-		local function apply_var(x, y, var)
-			apply(x, y, 'up'   , var.connections.up    and 'T' or 'F')
-			apply(x, y, 'right', var.connections.right and 'T' or 'F')
-			apply(x, y, 'down' , var.connections.down  and 'T' or 'F')
-			apply(x, y, 'left' , var.connections.left  and 'T' or 'F')
-		end
-
 		local function find_possible(x, y)
 			local typ = grid[x][y].type
 			local d = data[P(x, y)]
