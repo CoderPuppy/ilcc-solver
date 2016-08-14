@@ -1,0 +1,7 @@
+# Usage
+
+Generate a level:
+	solve.lua g <file> <width> <height>
+
+Solve a level:
+	solve.lua s <file>
