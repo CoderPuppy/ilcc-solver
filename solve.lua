@@ -768,7 +768,7 @@ elseif cmd:match '^s' then
 					bad(('no possible variants at (%d %d)'):format(p[1], p[2]))
 				end
 
-				if single_step then
+				if single_step and dirty[pk] then
 					coroutine.yield()
 				end
 			end
