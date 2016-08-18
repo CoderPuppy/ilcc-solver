@@ -750,10 +750,14 @@ elseif cmd:match '^s' then
 							none[dir] = nil
 						end
 
+						local rm_all = {}
 						for dir in pairs(all) do
 							if not possible.connections[dir] then
-								all[dir] = nil
+								rm_all[dir] = true
 							end
+						end
+						for dir in pairs(rm_all) do
+							all[dir] = nil
 						end
 					end
 
