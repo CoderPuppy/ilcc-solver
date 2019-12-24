@@ -1,14 +1,14 @@
 local do_ui = true
-local single_step = false
+local do_single_step = false
+local do_debug = false
+local progression_mode = 'sleep'
 local debug
-do
-	if false then
-		function debug(msg, ...)
-			print(msg:format(...))
-		end
-	else
-		function debug()
-		end
+if do_debug then
+	function debug(msg, ...)
+		print(msg:format(...))
+	end
+else
+	function debug()
 	end
 end
 
@@ -242,18 +242,14 @@ local cmd = ...
 
 local grid
 
-local data = setmetatable({}, {
-	__index = function(t, k)
-		local t_ = {}
-		t[k] = t_
-		return t_
-	end;
-})
+local data = {}
 local to_check = {}
 local really_done = {}
+local selected = {1}
 
 local dirty_render = {}
 local dirty = {}
+local full_dirty = {}
 local function mark_dirty(x, y)
 	if x <= 0 or x > grid.w or y <= 0 or y > grid.h then
 		return
@@ -261,6 +257,7 @@ local function mark_dirty(x, y)
 
 	dirty[P(x, y)] = {x, y}
 	dirty_render[P(x, y)] = {x, y}
+	full_dirty[P(x, y)] = {x, y}
 end
 
 local function compatible(...)
@@ -281,6 +278,7 @@ local apply
 do
 	local function do_apply(x, y, dir, v)
 		local d = data[P(x, y)]
+		if not d then return end
 		if not compatible(d[dir], v) then
 			error(('mismatch between fixed links at (%d %d) %s have %s applying %s'):format(x, y, dir, d[dir], v))
 		end
@@ -327,6 +325,7 @@ if cmd:match '^g' then
 		grid[x] = col
 		for y = 1, h do
 			col[y] = types[1].variants[1]
+			data[P(x, y)] = {}
 		end
 	end
 
@@ -471,7 +470,7 @@ if cmd:match '^g' then
 
 				apply_var(p[1], p[2], var)
 
-				if single_step then
+				if do_single_step then
 					coroutine.yield()
 				end
 			end
@@ -510,7 +509,9 @@ if cmd:match '^g' then
 	end
 
 	while coroutine.status(co) ~= 'dead' do
-		os.pullEvent('mouse_click')
+		if do_step then
+			os.pullEvent('mouse_click')
+		end
 		local ok, err = coroutine.resume(co)
 
 		if do_ui then
@@ -539,6 +540,12 @@ elseif cmd:match '^s' then
 		local h = fs.open(select(2, ...), 'r')
 		grid = parse(h.readAll())
 		h.close()
+	end
+
+	for x = 1, grid.w do
+		for y = 1, grid.h do
+			data[P(x, y)] = {}
+		end
 	end
 
 	local new_check = {}
@@ -614,7 +621,7 @@ elseif cmd:match '^s' then
 			local n = {}
 			c[t] = n
 			for k, v in pairs(t) do
-				n[k] = clone(v, c)
+				n[clone(k, c)] = clone(v, c)
 			end
 			setmetatable(n, getmetatable(t))
 			return n
@@ -645,7 +652,18 @@ elseif cmd:match '^s' then
 
 	local function bad(msg)
 		if #path > 0 then
-			error('TODO: rollback')
+			local rollback = path[#path]
+			path[#path] = nil
+			for k, v in pairs(full_dirty) do
+				dirty[k] = v
+				dirty_render[k] = v
+			end
+			data = rollback.state.data
+			to_check = rollback.state.to_check
+			really_done = rollback.state.really_done
+			full_dirty = rollback.state.full_dirty
+			selected[#selected] = nil
+			selected[#selected] = selected[#selected] + 1
 		else
 			error(msg)
 		end
@@ -702,16 +720,19 @@ elseif cmd:match '^s' then
 					data = data;
 					to_check = to_check;
 					really_done = really_done;
+					full_dirty = full_dirty;
 				}
 
 				path[#path + 1] = {
 					state = copy;
 					x = x; y = y;
-					i = 1;
 					possible = possible;
 				}
 
-				apply_var(x, y, possible[1])
+				local i = selected[#selected]
+				selected[#selected + 1] = 1
+
+				apply_var(x, y, possible[i])
 			end
 			dirty = {}
 
@@ -772,7 +793,7 @@ elseif cmd:match '^s' then
 					bad(('no possible variants at (%d %d)'):format(p[1], p[2]))
 				end
 
-				if single_step and dirty[pk] then
+				if do_single_step and dirty[pk] then
 					coroutine.yield()
 				end
 			end
@@ -814,7 +835,11 @@ elseif cmd:match '^s' then
 	end
 
 	while coroutine.status(co) ~= 'dead' do
-		os.pullEvent('mouse_click')
+		if progression_mode == 'click' then
+			os.pullEvent('mouse_click')
+		elseif progression_mode == 'sleep' then
+			sleep(0.5)
+		end
 		local ok, err = coroutine.resume(co)
 		if do_ui then
 			for pk, p in pairs(dirty_render) do
@@ -832,4 +857,6 @@ elseif cmd:match '^s' then
 		term.clear()
 		term.setCursorPos(1, 1)
 	end
+else
+	error('Unknown command: ' .. cmd, 0)
 end
